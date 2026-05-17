@@ -416,13 +416,14 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
   )
 
   // DeepSeek-specific cache fields (snake_case, not in standard LanguageModelUsage).
-  // prompt_cache_hit_tokens  = tokens served from cache (equivalent to cacheReadTokens)
-  // prompt_cache_miss_tokens = tokens not in cache, processed normally (equivalent to
-  //                            non-cached input; NOT the same as Anthropic cacheWriteTokens)
-  // @ts-expect-error - DeepSeek returns these outside the standard LanguageModelUsage type
-  const promptCacheHitTokens = safe(input.usage.prompt_cache_hit_tokens ?? 0)
-  // @ts-expect-error
-  const promptCacheMissTokens = safe(input.usage.prompt_cache_miss_tokens ?? 0)
+  // AI SDK normalizes prompt_cache_hit_tokens → inputTokenDetails.cacheReadTokens
+  // and prompt_cache_miss_tokens → inputTokenDetails.noCacheTokens.
+  // The raw fields are also available under usage.raw for direct access.
+  // @ts-expect-error - raw is not in the standard LanguageModelUsage type
+  const rawUsage = (input.usage.raw ?? {}) as Record<string, number>
+  const promptCacheHitTokens = safe(rawUsage["prompt_cache_hit_tokens"] ?? 0)
+  const promptCacheMissTokens = safe(rawUsage["prompt_cache_miss_tokens"] ?? 0)
+
 
   // Determine the effective "cache read" count for adjustedInputTokens and cost.
   // For DeepSeek: use prompt_cache_hit_tokens (already included in inputTokens).
@@ -436,8 +437,10 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
 
   const total = input.usage.totalTokens
 
-  // hit/miss are DeepSeek-only semantic fields; they are NOT set for other providers to
-  // avoid misrepresenting Anthropic's cacheWriteTokens (cache creation) as "miss".
+  // hit/miss are DeepSeek-only semantic fields read from usage.raw.
+  // prompt_cache_hit_tokens  = tokens served from DeepSeek prompt cache
+  // prompt_cache_miss_tokens = tokens not in cache (processed normally)
+  // ratio = hit / (hit + miss), i.e. fraction of prompt tokens served from cache
   const cacheHit = promptCacheHitTokens > 0 ? promptCacheHitTokens : undefined
   const cacheMiss = promptCacheMissTokens > 0 ? promptCacheMissTokens : undefined
   const cacheHitTotal = (cacheHit ?? 0) + (cacheMiss ?? 0)
