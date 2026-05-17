@@ -17,6 +17,7 @@ import { Shell } from "@/shell/shell"
 import { ShellID } from "./shell/id"
 
 import * as Truncate from "./truncate"
+import { summarizeToolOutput } from "./summarize"
 import { Plugin } from "@/plugin"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -577,6 +578,24 @@ export const ShellTool = Tool.define(
 
       if (cut && file) {
         output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output
+
+        // P2.5: 截断时注入规则摘要，帮助模型快速定位关键错误
+        const digest = summarizeToolOutput(raw, code ?? 0)
+        if (digest) {
+          const digestLines: string[] = [`<error_summary exit_code="${digest.exitCode}">`, `${digest.summary}`]
+          if (digest.importantLines.length > 0) {
+            digestLines.push("Key lines:")
+            digest.importantLines.forEach((l) => digestLines.push(`  ${l}`))
+          }
+          if (digest.fileRefs.length > 0) {
+            digestLines.push("File refs: " + digest.fileRefs.join(", "))
+          }
+          if (digest.failedTests.length > 0) {
+            digestLines.push("Failed tests: " + digest.failedTests.join(", "))
+          }
+          digestLines.push("</error_summary>")
+          output = digestLines.join("\n") + "\n\n" + output
+        }
       }
 
       if (meta.length > 0) {
