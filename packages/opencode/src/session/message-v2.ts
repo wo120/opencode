@@ -240,6 +240,9 @@ export const StepFinishPart = Schema.Struct({
     cache: Schema.Struct({
       read: Schema.Finite,
       write: Schema.Finite,
+      hit: Schema.optional(Schema.Finite),
+      miss: Schema.optional(Schema.Finite),
+      ratio: Schema.optional(Schema.Finite),
     }),
   }),
 }).annotate({ identifier: "StepFinishPart" })
@@ -479,6 +482,9 @@ export const Assistant = Schema.Struct({
     cache: Schema.Struct({
       read: Schema.Finite,
       write: Schema.Finite,
+      hit: Schema.optional(Schema.Finite),
+      miss: Schema.optional(Schema.Finite),
+      ratio: Schema.optional(Schema.Finite),
     }),
   }),
   structured: Schema.optional(Schema.Any),

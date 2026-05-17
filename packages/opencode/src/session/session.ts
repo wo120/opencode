@@ -69,6 +69,13 @@ export function fromRow(row: SessionRow): Info {
       : undefined
   const share = row.share_url ? { url: row.share_url } : undefined
   const revert = row.revert ?? undefined
+  
+  // 计算缓存命中率（如果有 hit/miss 数据）
+  const cacheHit = row.tokens_cache_read ?? 0
+  const cacheMiss = row.tokens_cache_write ?? 0
+  const cacheTotal = cacheHit + cacheMiss
+  const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : undefined
+  
   return {
     id: row.id,
     slug: row.slug,
@@ -96,6 +103,9 @@ export function fromRow(row: SessionRow): Info {
       cache: {
         read: row.tokens_cache_read,
         write: row.tokens_cache_write,
+        hit: cacheHit > 0 ? cacheHit : undefined,
+        miss: cacheMiss > 0 ? cacheMiss : undefined,
+        ratio: cacheRatio,
       },
     },
     share,
@@ -132,8 +142,9 @@ export function toRow(info: Info) {
     tokens_input: (info.tokens ?? EmptyTokens).input,
     tokens_output: (info.tokens ?? EmptyTokens).output,
     tokens_reasoning: (info.tokens ?? EmptyTokens).reasoning,
-    tokens_cache_read: (info.tokens ?? EmptyTokens).cache.read,
-    tokens_cache_write: (info.tokens ?? EmptyTokens).cache.write,
+    // 使用 hit/miss 如果存在，否则回退到 read/write
+    tokens_cache_read: (info.tokens ?? EmptyTokens).cache.hit ?? (info.tokens ?? EmptyTokens).cache.read,
+    tokens_cache_write: (info.tokens ?? EmptyTokens).cache.miss ?? (info.tokens ?? EmptyTokens).cache.write,
     revert: info.revert ?? null,
     permission: info.permission,
     time_created: info.time.created,
@@ -171,10 +182,13 @@ const Tokens = Schema.Struct({
   cache: Schema.Struct({
     read: Schema.Finite,
     write: Schema.Finite,
+    hit: optionalOmitUndefined(Schema.Finite),
+    miss: optionalOmitUndefined(Schema.Finite),
+    ratio: optionalOmitUndefined(Schema.Finite),
   }),
 })
 
-const EmptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+const EmptyTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0, hit: undefined, miss: undefined, ratio: undefined } }
 
 const Share = Schema.Struct({
   url: Schema.String,
@@ -394,12 +408,18 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
         // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
         input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
         // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
+        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ��
         // @ts-expect-error
         input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
         0,
     ),
   )
+
+  // DeepSeek 专属缓存字段提取
+  // @ts-expect-error - DeepSeek 返回的字段可能不在标准 LanguageModelUsage 类型中
+  const promptCacheHitTokens = safe(input.usage.prompt_cache_hit_tokens ?? 0)
+  // @ts-expect-error - DeepSeek 返回的字段可能不在标准 LanguageModelUsage 类型中
+  const promptCacheMissTokens = safe(input.usage.prompt_cache_miss_tokens ?? 0)
 
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
@@ -407,6 +427,12 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
   const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
 
   const total = input.usage.totalTokens
+
+  // 计算缓存命中率
+  const cacheHit = promptCacheHitTokens > 0 ? promptCacheHitTokens : (cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined)
+  const cacheMiss = promptCacheMissTokens > 0 ? promptCacheMissTokens : (cacheWriteInputTokens > 0 ? cacheWriteInputTokens : undefined)
+  const cacheTotal = (cacheHit ?? 0) + (cacheMiss ?? 0)
+  const cacheRatio = cacheTotal > 0 ? (cacheHit ?? 0) / cacheTotal : undefined
 
   const tokens = {
     total,
@@ -416,6 +442,9 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
     cache: {
       write: cacheWriteInputTokens,
       read: cacheReadInputTokens,
+      hit: cacheHit,
+      miss: cacheMiss,
+      ratio: cacheRatio,
     },
   }
 
