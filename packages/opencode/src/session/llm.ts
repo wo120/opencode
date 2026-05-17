@@ -139,6 +139,21 @@ const live: Layer.Layer<
             providerOptions: item.options,
           })
       const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
+
+      // Post-merge normalization: DeepSeek OpenAI-compatible API requires snake_case
+      // reasoning_effort. model/agent/variant layers may supply camelCase reasoningEffort
+      // which bypasses the provider-level transform, so we normalize here after all
+      // option layers have been merged.
+      if (
+        input.model.api.npm === "@ai-sdk/openai-compatible" &&
+        (input.model.providerID === "deepseek" || input.model.api.id.toLowerCase().includes("deepseek"))
+      ) {
+        if (options["reasoningEffort"] !== undefined && options["reasoning_effort"] === undefined) {
+          options["reasoning_effort"] = options["reasoningEffort"]
+          delete options["reasoningEffort"]
+        }
+      }
+
       if (isOpenaiOauth) {
         options.instructions = system.join("\n")
       }

@@ -69,13 +69,13 @@ export function fromRow(row: SessionRow): Info {
       : undefined
   const share = row.share_url ? { url: row.share_url } : undefined
   const revert = row.revert ?? undefined
-  
+
   // 计算缓存命中率（如果有 hit/miss 数据）
   const cacheHit = row.tokens_cache_read ?? 0
   const cacheMiss = row.tokens_cache_write ?? 0
   const cacheTotal = cacheHit + cacheMiss
   const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : undefined
-  
+
   return {
     id: row.id,
     slug: row.slug,

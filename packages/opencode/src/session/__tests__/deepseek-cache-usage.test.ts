@@ -192,7 +192,7 @@ describe("DeepSeek Cache Usage Telemetry", () => {
 
     // 验证成本计算包含了缓存成本
     expect(result.cost).toBeGreaterThan(0)
-    
+
     // 手动计算预期成本
     // input: 0 tokens (因为都在缓存中)
     // output: 200 tokens * $2.19 / 1M = $0.000438
