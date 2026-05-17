@@ -70,12 +70,12 @@ export function fromRow(row: SessionRow): Info {
   const share = row.share_url ? { url: row.share_url } : undefined
   const revert = row.revert ?? undefined
 
-  // 计算缓存命中率（如果有 hit/miss 数据）
-  const cacheHit = row.tokens_cache_read ?? 0
-  const cacheMiss = row.tokens_cache_write ?? 0
-  const cacheTotal = cacheHit + cacheMiss
-  const cacheRatio = cacheTotal > 0 ? cacheHit / cacheTotal : undefined
-
+  // tokens_cache_read  = standard cache-read tokens (Anthropic/Bedrock/etc.)
+  // tokens_cache_write = standard cache-write/creation tokens (Anthropic/Bedrock/etc.)
+  // hit/miss are DeepSeek-only and are stored in the same columns (toRow prefers hit/miss
+  // when present). We cannot distinguish them after the fact, so we only expose hit/miss
+  // when the session was recorded with DeepSeek semantics — which we can't detect here.
+  // Expose read/write as-is; the UI should use read/write for display.
   return {
     id: row.id,
     slug: row.slug,
@@ -103,9 +103,9 @@ export function fromRow(row: SessionRow): Info {
       cache: {
         read: row.tokens_cache_read,
         write: row.tokens_cache_write,
-        hit: cacheHit > 0 ? cacheHit : undefined,
-        miss: cacheMiss > 0 ? cacheMiss : undefined,
-        ratio: cacheRatio,
+        hit: undefined,
+        miss: undefined,
+        ratio: undefined,
       },
     },
     share,
@@ -415,24 +415,33 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
     ),
   )
 
-  // DeepSeek 专属缓存字段提取
-  // @ts-expect-error - DeepSeek 返回的字段可能不在标准 LanguageModelUsage 类型中
+  // DeepSeek-specific cache fields (snake_case, not in standard LanguageModelUsage).
+  // prompt_cache_hit_tokens  = tokens served from cache (equivalent to cacheReadTokens)
+  // prompt_cache_miss_tokens = tokens not in cache, processed normally (equivalent to
+  //                            non-cached input; NOT the same as Anthropic cacheWriteTokens)
+  // @ts-expect-error - DeepSeek returns these outside the standard LanguageModelUsage type
   const promptCacheHitTokens = safe(input.usage.prompt_cache_hit_tokens ?? 0)
-  // @ts-expect-error - DeepSeek 返回的字段可能不在标准 LanguageModelUsage 类型中
+  // @ts-expect-error
   const promptCacheMissTokens = safe(input.usage.prompt_cache_miss_tokens ?? 0)
+
+  // Determine the effective "cache read" count for adjustedInputTokens and cost.
+  // For DeepSeek: use prompt_cache_hit_tokens (already included in inputTokens).
+  // For others:   use cacheReadInputTokens (standard field, also included in inputTokens).
+  const effectiveCacheRead = promptCacheHitTokens > 0 ? promptCacheHitTokens : cacheReadInputTokens
 
   // AI SDK v6 normalized inputTokens to include cached tokens across all providers
   // (including Anthropic/Bedrock which previously excluded them). Always subtract cache
   // tokens to get the non-cached input count for separate cost calculation.
-  const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)
+  const adjustedInputTokens = safe(inputTokens - effectiveCacheRead - cacheWriteInputTokens)
 
   const total = input.usage.totalTokens
 
-  // 计算缓存命中率
-  const cacheHit = promptCacheHitTokens > 0 ? promptCacheHitTokens : (cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined)
-  const cacheMiss = promptCacheMissTokens > 0 ? promptCacheMissTokens : (cacheWriteInputTokens > 0 ? cacheWriteInputTokens : undefined)
-  const cacheTotal = (cacheHit ?? 0) + (cacheMiss ?? 0)
-  const cacheRatio = cacheTotal > 0 ? (cacheHit ?? 0) / cacheTotal : undefined
+  // hit/miss are DeepSeek-only semantic fields; they are NOT set for other providers to
+  // avoid misrepresenting Anthropic's cacheWriteTokens (cache creation) as "miss".
+  const cacheHit = promptCacheHitTokens > 0 ? promptCacheHitTokens : undefined
+  const cacheMiss = promptCacheMissTokens > 0 ? promptCacheMissTokens : undefined
+  const cacheHitTotal = (cacheHit ?? 0) + (cacheMiss ?? 0)
+  const cacheRatio = cacheHitTotal > 0 ? (cacheHit ?? 0) / cacheHitTotal : undefined
 
   const tokens = {
     total,
@@ -440,8 +449,10 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
     output: safe(outputTokens - reasoningTokens),
     reasoning: reasoningTokens,
     cache: {
-      write: cacheWriteInputTokens,
+      // read/write: standard fields (Anthropic, Bedrock, etc.)
       read: cacheReadInputTokens,
+      write: cacheWriteInputTokens,
+      // hit/miss: DeepSeek-only; undefined for all other providers
       hit: cacheHit,
       miss: cacheMiss,
       ratio: cacheRatio,
@@ -461,7 +472,9 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
       new Decimal(0)
         .add(new Decimal(tokens.input).mul(costInfo?.input ?? 0).div(1_000_000))
         .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
-        .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
+        // For DeepSeek: effectiveCacheRead == hit tokens, billed at cache.read rate.
+        // For others:   tokens.cache.read == cacheReadInputTokens, same path.
+        .add(new Decimal(effectiveCacheRead).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
         .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
         // TODO: update models.dev to have better pricing model, for now:
         // charge reasoning tokens at the same rate as output tokens
