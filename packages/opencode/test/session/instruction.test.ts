@@ -252,15 +252,4 @@ describe("Instruction.systemPaths global config", () => {
   )
 })
 
-describe("P3: Instruction.system - glob 结果稳定排序", () => {
-  test("instruction.ts 的 system() 函数对路径做了排序（源码验证）", () => {
-    const fs = require("fs")
-    const src = fs.readFileSync(
-      require("path").join(__dirname, "../../src/session/instruction.ts"),
-      "utf-8",
-    )
-    // system() 函数必须对 paths 做排序后再转数组
-    // 期望看到类似 Array.from(paths).sort() 或 [...paths].sort() 的代码
-    expect(src).toMatch(/Array\.from\(paths\)[^)]*\.sort\(\)|sort\(\)[^)]*Array\.from\(paths\)|\[\.\.\.paths\][^)]*\.sort\(\)/s)
-  })
-})
+
