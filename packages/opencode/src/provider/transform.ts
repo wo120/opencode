@@ -1167,6 +1167,15 @@ export function options(input: {
     }
   }
 
+  // Enable parallel tool calls for DeepSeek models so the model can return
+  // multiple tool calls in a single response turn instead of stopping after one.
+  if (
+    input.model.api.npm === "@ai-sdk/openai-compatible" &&
+    (input.model.providerID === "deepseek" || input.model.api.id.toLowerCase().includes("deepseek"))
+  ) {
+    result["parallelToolCalls"] = true
+  }
+
   return result
 }
 

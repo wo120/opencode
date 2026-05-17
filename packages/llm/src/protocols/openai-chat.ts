@@ -77,6 +77,7 @@ export const bodyFields = {
   messages: Schema.Array(OpenAIChatMessage),
   tools: optionalArray(OpenAIChatTool),
   tool_choice: Schema.optional(OpenAIChatToolChoice),
+  parallel_tool_calls: Schema.optional(Schema.Boolean),
   stream: Schema.Literal(true),
   stream_options: Schema.optional(Schema.Struct({ include_usage: Schema.Boolean })),
   store: Schema.optional(Schema.Boolean),
@@ -128,6 +129,7 @@ type OpenAIChatToolCallDelta = Schema.Schema.Type<typeof OpenAIChatToolCallDelta
 
 const OpenAIChatDelta = Schema.Struct({
   content: optionalNull(Schema.String),
+  reasoning_content: optionalNull(Schema.String),
   tool_calls: optionalNull(Schema.Array(OpenAIChatToolCallDelta)),
 })
 
@@ -149,6 +151,7 @@ interface ParserState {
   readonly usage?: Usage
   readonly finishReason?: FinishReason
   readonly lifecycle: Lifecycle.State
+  readonly reasoningId: string
 }
 
 const invalid = ProviderShared.invalidRequest
@@ -250,9 +253,16 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
   const reasoningEffort = OpenAIOptions.reasoningEffort(request)
   if (reasoningEffort && !OpenAIOptions.isReasoningEffort(reasoningEffort))
     return yield* invalid(`OpenAI Chat does not support reasoning effort ${reasoningEffort}`)
+  // Read parallel_tool_calls from openaiCompatible provider options (used by DeepSeek and others)
+  const openaiCompatibleOptions = request.providerOptions?.openaiCompatible
+  const parallelToolCalls =
+    isRecord(openaiCompatibleOptions) && typeof openaiCompatibleOptions.parallelToolCalls === "boolean"
+      ? openaiCompatibleOptions.parallelToolCalls
+      : undefined
   return {
     ...(store !== undefined ? { store } : {}),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(parallelToolCalls !== undefined ? { parallel_tool_calls: parallelToolCalls } : {}),
   }
 })
 
@@ -327,6 +337,11 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
 
     if (delta?.content) lifecycle = Lifecycle.textDelta(lifecycle, events, "text-0", delta.content)
 
+    // Parse DeepSeek reasoning_content from streaming delta
+    if (delta?.reasoning_content) {
+      lifecycle = Lifecycle.reasoningDelta(lifecycle, events, state.reasoningId, delta.reasoning_content)
+    }
+
     for (const tool of toolDeltas) {
       const result = ToolStream.appendOrStart(
         ADAPTER,
@@ -355,6 +370,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
         usage,
         finishReason,
         lifecycle,
+        reasoningId: state.reasoningId,
       },
       events,
     ] as const
@@ -387,7 +403,12 @@ export const protocol = Protocol.make({
   },
   stream: {
     event: Protocol.jsonEvent(OpenAIChatEvent),
-    initial: () => ({ tools: ToolStream.empty<number>(), toolCallEvents: [], lifecycle: Lifecycle.initial() }),
+    initial: () => ({
+      tools: ToolStream.empty<number>(),
+      toolCallEvents: [],
+      lifecycle: Lifecycle.initial(),
+      reasoningId: "reasoning-0",
+    }),
     step,
     onHalt: finishEvents,
   },
