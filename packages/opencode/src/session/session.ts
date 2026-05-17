@@ -408,7 +408,7 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
         // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
         input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
         // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ��
+        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
         // @ts-expect-error
         input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
         0,

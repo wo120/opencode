@@ -1174,6 +1174,14 @@ export function options(input: {
     (input.model.providerID === "deepseek" || input.model.api.id.toLowerCase().includes("deepseek"))
   ) {
     result["parallelToolCalls"] = true
+
+    // 归一化 reasoningEffort → reasoning_effort（DeepSeek OpenAI-compatible API 使用 snake_case）
+    // 支持用户配置 camelCase（reasoningEffort）或 snake_case（reasoning_effort）两种写法
+    const effort =
+      input.providerOptions?.["reasoning_effort"] ?? input.providerOptions?.["reasoningEffort"]
+    if (effort !== undefined) {
+      result["reasoning_effort"] = effort
+    }
   }
 
   return result

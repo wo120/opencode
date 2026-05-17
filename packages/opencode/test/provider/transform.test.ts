@@ -3809,3 +3809,89 @@ describe("ProviderTransform.providerOptions - ai-gateway-provider", () => {
     expect(result).toEqual({ openaiCompatible: { reasoningEffort: "high" } })
   })
 })
+
+describe("ProviderTransform.options - DeepSeek reasoning_effort normalization", () => {
+  const sessionID = "test-session-123"
+
+  const deepseekModel = {
+    id: ModelID.make("deepseek/deepseek-v4-pro"),
+    providerID: ProviderID.make("deepseek"),
+    api: {
+      id: "deepseek-v4-pro",
+      url: "https://api.deepseek.com",
+      npm: "@ai-sdk/openai-compatible",
+    },
+    name: "DeepSeek V4 Pro",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: false,
+      toolcall: true,
+      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: { field: "reasoning_content" },
+    },
+    cost: { input: 0.55, output: 2.19, cache: { read: 0.14, write: 0.55 } },
+    limit: { context: 65536, output: 8192 },
+    status: "active",
+    options: {},
+    headers: {},
+    release_date: "2025-05-01",
+    variants: {},
+  } as any
+
+  test("camelCase reasoningEffort 应被归一化为 snake_case reasoning_effort", () => {
+    const result = ProviderTransform.options({
+      model: deepseekModel,
+      sessionID,
+      providerOptions: { reasoningEffort: "high" },
+    })
+    // DeepSeek OpenAI-compatible API 期望 reasoning_effort（snake_case）
+    expect(result["reasoning_effort"]).toBe("high")
+    // camelCase 版本不应出现在最终 options 中
+    expect(result["reasoningEffort"]).toBeUndefined()
+  })
+
+  test("snake_case reasoning_effort 直接透传，不做修改", () => {
+    const result = ProviderTransform.options({
+      model: deepseekModel,
+      sessionID,
+      providerOptions: { reasoning_effort: "max" },
+    })
+    expect(result["reasoning_effort"]).toBe("max")
+    expect(result["reasoningEffort"]).toBeUndefined()
+  })
+
+  test("非 DeepSeek 模型的 reasoningEffort 不受影响", () => {
+    const openaiModel = {
+      ...deepseekModel,
+      id: ModelID.make("openai/gpt-4o"),
+      providerID: ProviderID.make("openai"),
+      api: {
+        id: "gpt-4o",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    } as any
+
+    const result = ProviderTransform.options({
+      model: openaiModel,
+      sessionID,
+      providerOptions: { reasoningEffort: "high" },
+    })
+    // options() 函数不透传 providerOptions 中的任意字段给非 DeepSeek 模型
+    // reasoningEffort 对 OpenAI 模型通过 variants 机制传递，不在此函数处理
+    // 关键验证：非 DeepSeek 模型不会被错误地注入 reasoning_effort（snake_case）
+    expect(result["reasoning_effort"]).toBeUndefined()
+  })
+
+  test("DeepSeek 模型未配置 reasoningEffort 时不注入该字段", () => {
+    const result = ProviderTransform.options({
+      model: deepseekModel,
+      sessionID,
+      providerOptions: {},
+    })
+    expect(result["reasoning_effort"]).toBeUndefined()
+    expect(result["reasoningEffort"]).toBeUndefined()
+  })
+})
