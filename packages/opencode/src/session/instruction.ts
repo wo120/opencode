@@ -158,13 +158,15 @@ export const layer: Layer.Layer<
         (item) => item.startsWith("https://") || item.startsWith("http://"),
       )
 
-      // P3: 对路径排序，确保 system prompt 前缀稳定，提高 prompt cache 命中率
-      const sortedPaths = Array.from(paths).sort()
-      const files = yield* Effect.forEach(sortedPaths, read, { concurrency: 8 })
+      // P3: 对 config 额外路径排序以稳定 prompt 前缀，提高 prompt cache 命中率。
+      // global/project 路径由 systemPaths() 按语义顺序插入（global 先、project 后），
+      // 不能用字母序覆盖，否则破坏既有顺序保证。
+      const allPaths = Array.from(paths)
+      const files = yield* Effect.forEach(allPaths, read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
 
       return [
-        ...sortedPaths.flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
+        ...allPaths.flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),
         ...urls.flatMap((item, i) => (remote[i] ? [`Instructions from: ${item}\n${remote[i]}`] : [])),
       ]
     })
