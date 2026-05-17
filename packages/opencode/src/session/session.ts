@@ -449,8 +449,10 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
     output: safe(outputTokens - reasoningTokens),
     reasoning: reasoningTokens,
     cache: {
-      // read/write: standard fields (Anthropic, Bedrock, etc.)
-      read: cacheReadInputTokens,
+      // read: effectiveCacheRead so DeepSeek hit tokens flow into session aggregation
+      // (projectors.ts accumulates tokens_cache_read from this field).
+      // For non-DeepSeek providers effectiveCacheRead == cacheReadInputTokens, no change.
+      read: effectiveCacheRead,
       write: cacheWriteInputTokens,
       // hit/miss: DeepSeek-only; undefined for all other providers
       hit: cacheHit,
@@ -472,9 +474,7 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
       new Decimal(0)
         .add(new Decimal(tokens.input).mul(costInfo?.input ?? 0).div(1_000_000))
         .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
-        // For DeepSeek: effectiveCacheRead == hit tokens, billed at cache.read rate.
-        // For others:   tokens.cache.read == cacheReadInputTokens, same path.
-        .add(new Decimal(effectiveCacheRead).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
         .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
         // TODO: update models.dev to have better pricing model, for now:
         // charge reasoning tokens at the same rate as output tokens
