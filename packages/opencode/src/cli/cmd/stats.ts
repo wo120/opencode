@@ -7,7 +7,7 @@ import { SessionTable } from "../../session/session.sql"
 import { Project } from "@/project/project"
 import { InstanceRef } from "@/effect/instance-ref"
 
-interface SessionStats {
+export interface SessionStats {
   totalSessions: number
   totalMessages: number
   totalCost: number
@@ -18,6 +18,8 @@ interface SessionStats {
     cache: {
       read: number
       write: number
+      hit: number
+      miss: number
     }
   }
   toolUsage: Record<string, number>
@@ -31,6 +33,8 @@ interface SessionStats {
         cache: {
           read: number
           write: number
+          hit: number
+          miss: number
         }
       }
       cost: number
@@ -65,6 +69,10 @@ export const StatsCommand = effectCmd({
       .option("project", {
         describe: "filter by project (default: all projects, empty string: current project)",
         type: "string",
+      })
+      .option("cache", {
+        describe: "show DeepSeek prompt-cache hit/miss report",
+        type: "boolean",
       }),
   handler: Effect.fn("Cli.stats")(function* (args) {
     const ctx = yield* InstanceRef
@@ -76,7 +84,7 @@ export const StatsCommand = effectCmd({
     } else if (typeof args.models === "number") {
       modelLimit = args.models
     }
-    displayStats(stats, args.tools, modelLimit)
+    displayStats(stats, args.tools, modelLimit, args.cache)
   }),
 })
 
@@ -131,6 +139,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
       cache: {
         read: 0,
         write: 0,
+        hit: 0,
+        miss: 0,
       },
     },
     toolUsage: {},
@@ -168,13 +178,18 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
           .pipe(Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed([])))
 
         const sessionCost = session.cost ?? 0
-        const sessionTokens = session.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-        let sessionToolUsage: Record<string, number> = {}
-        let sessionModelUsage: Record<
+        const sessionTokens = session.tokens ?? {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0, hit: undefined, miss: undefined, ratio: undefined },
+        }
+        const sessionToolUsage: Record<string, number> = {}
+        const sessionModelUsage: Record<
           string,
           {
             messages: number
-            tokens: { input: number; output: number; cache: { read: number; write: number } }
+            tokens: { input: number; output: number; cache: { read: number; write: number; hit: number; miss: number } }
             cost: number
           }
         > = {}
@@ -185,7 +200,7 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
             if (!sessionModelUsage[modelKey]) {
               sessionModelUsage[modelKey] = {
                 messages: 0,
-                tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+                tokens: { input: 0, output: 0, cache: { read: 0, write: 0, hit: 0, miss: 0 } },
                 cost: 0,
               }
             }
@@ -198,6 +213,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
                 (message.info.tokens.output || 0) + (message.info.tokens.reasoning || 0)
               sessionModelUsage[modelKey].tokens.cache.read += message.info.tokens.cache?.read || 0
               sessionModelUsage[modelKey].tokens.cache.write += message.info.tokens.cache?.write || 0
+              sessionModelUsage[modelKey].tokens.cache.hit += message.info.tokens.cache?.hit || 0
+              sessionModelUsage[modelKey].tokens.cache.miss += message.info.tokens.cache?.miss || 0
             }
           }
 
@@ -220,6 +237,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
             sessionTokens.cache.write,
           sessionToolUsage,
           sessionModelUsage,
+          sessionCacheHit: Object.values(sessionModelUsage).reduce((sum, usage) => sum + usage.tokens.cache.hit, 0),
+          sessionCacheMiss: Object.values(sessionModelUsage).reduce((sum, usage) => sum + usage.tokens.cache.miss, 0),
           earliestTime: cutoffTime > 0 ? session.time.updated : session.time.created,
           latestTime: session.time.updated,
         }
@@ -239,6 +258,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
     stats.totalTokens.reasoning += result.sessionTokens.reasoning
     stats.totalTokens.cache.read += result.sessionTokens.cache.read
     stats.totalTokens.cache.write += result.sessionTokens.cache.write
+    stats.totalTokens.cache.hit += result.sessionCacheHit
+    stats.totalTokens.cache.miss += result.sessionCacheMiss
 
     for (const [tool, count] of Object.entries(result.sessionToolUsage)) {
       stats.toolUsage[tool] = (stats.toolUsage[tool] || 0) + count
@@ -248,7 +269,7 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
       if (!stats.modelUsage[model]) {
         stats.modelUsage[model] = {
           messages: 0,
-          tokens: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          tokens: { input: 0, output: 0, cache: { read: 0, write: 0, hit: 0, miss: 0 } },
           cost: 0,
         }
       }
@@ -257,6 +278,8 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
       stats.modelUsage[model].tokens.output += usage.tokens.output
       stats.modelUsage[model].tokens.cache.read += usage.tokens.cache.read
       stats.modelUsage[model].tokens.cache.write += usage.tokens.cache.write
+      stats.modelUsage[model].tokens.cache.hit += usage.tokens.cache.hit
+      stats.modelUsage[model].tokens.cache.miss += usage.tokens.cache.miss
       stats.modelUsage[model].cost += usage.cost
     }
   }
@@ -288,7 +311,7 @@ const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
   return stats
 })
 
-export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit?: number) {
+export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit?: number, showCacheReport = false) {
   const width = 56
 
   function renderRow(label: string, value: string): string {
@@ -327,6 +350,22 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
   console.log("└────────────────────────────────────────────────────────┘")
   console.log()
 
+  if (showCacheReport) {
+    const cache = buildCacheMetrics(stats)
+    console.log("┌────────────────────────────────────────────────────────┐")
+    console.log("│                  CACHE EFFICIENCY                      │")
+    console.log("├────────────────────────────────────────────────────────┤")
+    console.log(renderRow("Prompt Cache Hit", formatNumber(cache.hit)))
+    console.log(renderRow("Prompt Cache Miss", formatNumber(cache.miss)))
+    console.log(renderRow("Hit Ratio", formatPercent(cache.hitRatio)))
+    console.log(renderRow("Cache Read", formatNumber(cache.read)))
+    console.log(renderRow("Cache Write", formatNumber(cache.write)))
+    console.log(renderRow("Non-cached Input", formatNumber(cache.nonCachedInput)))
+    console.log(renderRow("Total Accounted", formatNumber(cache.totalAccountedTokens)))
+    console.log(renderRow("Cost", `$${cache.cost.toFixed(4)}`))
+    console.log("└────────────────────────────────────────────────────────┘")
+    console.log()
+  }
   // Model Usage section
   if (modelLimit !== undefined && Object.keys(stats.modelUsage).length > 0) {
     const sortedModels = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.messages - a.messages)
@@ -343,6 +382,8 @@ export function displayStats(stats: SessionStats, toolLimit?: number, modelLimit
       console.log(renderRow("  Output Tokens", formatNumber(usage.tokens.output)))
       console.log(renderRow("  Cache Read", formatNumber(usage.tokens.cache.read)))
       console.log(renderRow("  Cache Write", formatNumber(usage.tokens.cache.write)))
+      console.log(renderRow("  Cache Hit", formatNumber(usage.tokens.cache.hit)))
+      console.log(renderRow("  Cache Miss", formatNumber(usage.tokens.cache.miss)))
       console.log(renderRow("  Cost", `$${usage.cost.toFixed(4)}`))
       console.log("├────────────────────────────────────────────────────────┤")
     }
@@ -389,4 +430,29 @@ function formatNumber(num: number): string {
     return (num / 1000).toFixed(1) + "K"
   }
   return num.toString()
+}
+
+export function buildCacheMetrics(stats: Pick<SessionStats, "totalCost" | "totalTokens">) {
+  const hit = stats.totalTokens.cache.hit
+  const miss = stats.totalTokens.cache.miss
+  const hitTotal = hit + miss
+  return {
+    hit,
+    miss,
+    hitRatio: hitTotal > 0 ? hit / hitTotal : 0,
+    read: stats.totalTokens.cache.read,
+    write: stats.totalTokens.cache.write,
+    nonCachedInput: stats.totalTokens.input,
+    totalAccountedTokens:
+      stats.totalTokens.input +
+      stats.totalTokens.output +
+      stats.totalTokens.reasoning +
+      stats.totalTokens.cache.read +
+      stats.totalTokens.cache.write,
+    cost: stats.totalCost,
+  }
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
 }

@@ -148,6 +148,8 @@ Run from `packages/opencode`:
 PATH="$HOME/.bun/bin:$PATH" bun test src/session/__tests__/deepseek-cache-usage.test.ts
 PATH="$HOME/.bun/bin:$PATH" bun test test/provider/transform.test.ts --test-name-pattern 'DeepSeek'
 PATH="$HOME/.bun/bin:$PATH" bun test test/session/prompt.test.ts --test-name-pattern 'title generation uses configured small_model'
+PATH="$HOME/.bun/bin:$PATH" bun test test/cli/stats.test.ts
+PATH="$HOME/.bun/bin:$PATH" bun run --conditions=browser ./src/index.ts stats --days 1 --cache --models 3
 PATH="$HOME/.bun/bin:$PATH" bun typecheck
 ```
 
