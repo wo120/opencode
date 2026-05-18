@@ -1186,6 +1186,42 @@ describe("tool.shell truncation", () => {
     ),
   )
 
+
+  it.live("injects error_summary only for truncated failed output", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const command = `${fill("lines", Truncate.MAX_LINES + 100)} && echo "src/failure.ts:42: error TS1234" && exit 7`
+        const result = yield* run({
+          command,
+          description: "Generate failing truncated output",
+        })
+        mustTruncate(result)
+        expect(result.metadata.exit).toBe(7)
+        expect(result.output).toContain('<error_summary exit_code="7">')
+        expect(result.output).toContain("Key lines:")
+        expect(result.output).toContain("src/failure.ts:42: error TS1234")
+        expect(result.output).toContain("File refs: src/failure.ts:42")
+      }),
+    ),
+  )
+
+  it.live("does not inject error_summary for truncated successful output", () =>
+    runIn(
+      projectRoot,
+      Effect.gen(function* () {
+        const result = yield* run({
+          command: fill("lines", Truncate.MAX_LINES + 100),
+          description: "Generate successful truncated output",
+        })
+        mustTruncate(result)
+        expect(result.metadata.exit).toBe(0)
+        expect(result.output).toMatch(/\.\.\.output truncated\.\.\./)
+        expect(result.output).not.toContain("<error_summary")
+      }),
+    ),
+  )
+
   it.live("does not truncate small output", () =>
     runIn(
       projectRoot,
