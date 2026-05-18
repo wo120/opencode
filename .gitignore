@@ -30,3 +30,8 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
+# Local agent/runtime artifacts
+.codex-worker-router/
+docs/
+packages/opencode/.sisyphus/

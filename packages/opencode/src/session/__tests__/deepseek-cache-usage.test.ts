@@ -51,9 +51,11 @@ describe("DeepSeek Cache Usage Telemetry", () => {
       inputTokens: 1000,
       outputTokens: 200,
       totalTokens: 1200,
-      prompt_cache_hit_tokens: 800,
-      prompt_cache_miss_tokens: 200,
-    } as LanguageModelUsage & { prompt_cache_hit_tokens: number; prompt_cache_miss_tokens: number }
+      raw: {
+        prompt_cache_hit_tokens: 800,
+        prompt_cache_miss_tokens: 200,
+      },
+    } as unknown as LanguageModelUsage
 
     const result = getUsage({ model: mockDeepSeekModel, usage })
 
@@ -67,9 +69,11 @@ describe("DeepSeek Cache Usage Telemetry", () => {
       inputTokens: 5000,
       outputTokens: 500,
       totalTokens: 5500,
-      prompt_cache_hit_tokens: 4500,
-      prompt_cache_miss_tokens: 500,
-    } as LanguageModelUsage & { prompt_cache_hit_tokens: number; prompt_cache_miss_tokens: number }
+      raw: {
+        prompt_cache_hit_tokens: 4500,
+        prompt_cache_miss_tokens: 500,
+      },
+    } as unknown as LanguageModelUsage
 
     const result = getUsage({ model: mockDeepSeekModel, usage })
 
@@ -129,9 +133,11 @@ describe("DeepSeek Cache Usage Telemetry", () => {
         cacheReadTokens: 100,
         cacheWriteTokens: 50,
       },
-      prompt_cache_hit_tokens: 800,
-      prompt_cache_miss_tokens: 200,
-    } as LanguageModelUsage & { prompt_cache_hit_tokens: number; prompt_cache_miss_tokens: number }
+      raw: {
+        prompt_cache_hit_tokens: 800,
+        prompt_cache_miss_tokens: 200,
+      },
+    } as unknown as LanguageModelUsage
 
     const result = getUsage({ model: mockDeepSeekModel, usage })
 
@@ -148,9 +154,11 @@ describe("DeepSeek Cache Usage Telemetry", () => {
       outputTokens: 500,
       totalTokens: 1500,
       outputTokenDetails: { reasoningTokens: 300 },
-      prompt_cache_hit_tokens: 800,
-      prompt_cache_miss_tokens: 200,
-    } as LanguageModelUsage & { prompt_cache_hit_tokens: number; prompt_cache_miss_tokens: number }
+      raw: {
+        prompt_cache_hit_tokens: 800,
+        prompt_cache_miss_tokens: 200,
+      },
+    } as unknown as LanguageModelUsage
 
     const result = getUsage({ model: mockDeepSeekModel, usage })
 
@@ -169,9 +177,11 @@ describe("DeepSeek Cache Usage Telemetry", () => {
       inputTokens: 1000,
       outputTokens: 200,
       totalTokens: 1200,
-      prompt_cache_hit_tokens: 800,
-      prompt_cache_miss_tokens: 200,
-    } as LanguageModelUsage & { prompt_cache_hit_tokens: number; prompt_cache_miss_tokens: number }
+      raw: {
+        prompt_cache_hit_tokens: 800,
+        prompt_cache_miss_tokens: 200,
+      },
+    } as unknown as LanguageModelUsage
 
     const result = getUsage({ model: mockDeepSeekModel, usage })
 
