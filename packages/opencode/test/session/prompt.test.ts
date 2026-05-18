@@ -259,6 +259,18 @@ const cfg = {
           cost: { input: 0, output: 0 },
           options: {},
         },
+        "small-model": {
+          id: "small-model",
+          name: "Small Test Model",
+          attachment: false,
+          reasoning: false,
+          temperature: false,
+          tool_call: true,
+          release_date: "2025-01-01",
+          limit: { context: 100000, output: 10000 },
+          cost: { input: 0, output: 0 },
+          options: {},
+        },
       },
       options: {
         apiKey: "test-key",
@@ -473,6 +485,40 @@ it.instance(
       const parts = result.parts.filter((p) => p.type === "text")
       expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
       expect(yield* llm.hits).toHaveLength(1)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "title generation uses configured small_model",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        small_model: "test/small-model",
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("world")
+
+      yield* prompt.loop({ sessionID: chat.id })
+      yield* llm.wait(2)
+
+      const hits = yield* llm.hits
+      const titleHit = hits.find((hit) => JSON.stringify(hit.body).includes("Generate a title for this conversation"))
+      const mainHit = hits.find((hit) => !JSON.stringify(hit.body).includes("Generate a title for this conversation"))
+      expect(titleHit?.body.model).toBe("small-model")
+      expect(mainHit?.body.model).toBe("test-model")
+      expect((yield* sessions.get(chat.id)).title).toBe("E2E Title")
     }),
   { git: true },
 )

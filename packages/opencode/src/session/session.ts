@@ -419,7 +419,6 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
   // AI SDK normalizes prompt_cache_hit_tokens → inputTokenDetails.cacheReadTokens
   // and prompt_cache_miss_tokens → inputTokenDetails.noCacheTokens.
   // The raw fields are also available under usage.raw for direct access.
-  // @ts-expect-error - raw is not in the standard LanguageModelUsage type
   const rawUsage = (input.usage.raw ?? {}) as Record<string, number>
   const promptCacheHitTokens = safe(rawUsage["prompt_cache_hit_tokens"] ?? 0)
   const promptCacheMissTokens = safe(rawUsage["prompt_cache_miss_tokens"] ?? 0)
