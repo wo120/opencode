@@ -212,6 +212,36 @@ function layer(result: "continue" | "compact") {
   )
 }
 
+function modelWithID(id: string): Provider.Model {
+  return {
+    ...createModel({ context: 100_000, output: 32_000 }),
+    id: ModelID.make(id),
+    name: id,
+  }
+}
+
+function providerModels(options: { small?: Provider.Model; compaction?: Provider.Model }) {
+  const main = modelWithID(ref.modelID)
+  const models = Object.fromEntries(
+    [main, options.small, options.compaction]
+      .filter((model): model is Provider.Model => model !== undefined)
+      .map((model) => [model.id, model]),
+  )
+  return ProviderTest.fake({
+    model: main,
+    info: ProviderTest.info({ models }, main),
+    getModel: Effect.fn("TestProvider.getModel")((providerID, modelID) => {
+      if (providerID !== ref.providerID) return Effect.die(new Error(`Unknown test provider: ${providerID}`))
+      const model = models[modelID]
+      if (!model) return Effect.die(new Error(`Unknown test model: ${providerID}/${modelID}`))
+      return Effect.succeed(model)
+    }),
+    getSmallModel: Effect.fn("TestProvider.getSmallModel")((providerID) =>
+      Effect.succeed(providerID === ref.providerID ? options.small : undefined),
+    ),
+  })
+}
+
 function cfg(compaction?: Config.Info["compaction"]) {
   const base = Schema.decodeUnknownSync(Config.Info)({}) as Config.Info
   return TestConfig.layer({
@@ -248,6 +278,7 @@ type CompactionProcessOptions = {
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
+  agent?: Layer.Layer<Agent.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -271,7 +302,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(options?.llm ?? LLM.defaultLayer),
     Layer.provide(Permission.defaultLayer),
-    Layer.provide(Agent.defaultLayer),
+    Layer.provide(options?.agent ?? Agent.defaultLayer),
     Layer.provide(options?.plugin ?? Plugin.defaultLayer),
     Layer.provide(status),
     Layer.provide(bus),
@@ -280,6 +311,29 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provide(EventV2Bridge.defaultLayer),
   )
+}
+
+function compactionAgent(model: Provider.Model) {
+  return Layer.mock(Agent.Service)({
+    get: () =>
+      Effect.succeed({
+        name: "compaction",
+        mode: "primary",
+        native: true,
+        hidden: true,
+        permission: Permission.fromConfig({ "*": "deny" }),
+        options: {},
+        model: { providerID: model.providerID, modelID: model.id },
+      }),
+  })
+}
+
+function selectedSummaryModel(messages: MessageV2.WithParts[]) {
+  const summary = messages.find(
+    (message): message is MessageV2.WithParts & { info: MessageV2.Assistant } =>
+      message.info.role === "assistant" && message.info.summary === true,
+  )
+  return summary?.info.modelID
 }
 
 function createSummaryCompaction(sessionID: SessionID) {
@@ -899,6 +953,69 @@ describe("session.compaction.process", () => {
         expect(JSON.stringify(summary.info.error)).toContain("Session too large to compact")
       }
     }).pipe(withCompaction({ result: "compact" })),
+  )
+
+  itCompaction.instance(
+    "uses compaction agent model before small_model",
+    () => {
+      let selected: string | undefined
+      const compaction = modelWithID("compaction-model")
+      const small = modelWithID("small-model")
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+        selected = selectedSummaryModel(yield* ssn.messages({ sessionID: session.id }))
+      }).pipe(
+        withCompaction({
+          provider: providerModels({ small, compaction }),
+          agent: compactionAgent(compaction),
+        }),
+        Effect.andThen(() => Effect.sync(() => expect(selected).toBe("compaction-model"))),
+      )
+    },
+  )
+
+  itCompaction.instance(
+    "uses configured small_model when compaction agent has no model",
+    () => {
+      let selected: string | undefined
+      const small = modelWithID("small-model")
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+        selected = selectedSummaryModel(yield* ssn.messages({ sessionID: session.id }))
+      }).pipe(
+        withCompaction({ provider: providerModels({ small }) }),
+        Effect.andThen(() => Effect.sync(() => expect(selected).toBe("small-model"))),
+      )
+    },
+  )
+
+  itCompaction.instance(
+    "falls back to foreground model when no compaction or small model is available",
+    () => {
+      let selected: string | undefined
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+        selected = selectedSummaryModel(yield* ssn.messages({ sessionID: session.id }))
+      }).pipe(
+        withCompaction({ provider: providerModels({}) }),
+        Effect.andThen(() => Effect.sync(() => expect(selected).toBe(ref.modelID))),
+      )
+    },
   )
 
   it.instance(
