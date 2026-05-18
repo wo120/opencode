@@ -205,7 +205,7 @@ describe("tool.read external_directory permission", () => {
     )
   }
 
-  it.live("uses worktree-relative path for read permission so user rules match like edit/write", () =>
+  it.live("auto-allows ordinary project reads without asking for read permission", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       yield* put(path.join(dir, "src", "secret.ts"), "shh")
@@ -213,8 +213,7 @@ describe("tool.read external_directory permission", () => {
       const { items, next } = asks()
       yield* exec(dir, { filePath: path.join(dir, "src", "secret.ts") }, next)
       const read = items.find((item) => item.permission === "read")
-      expect(read).toBeDefined()
-      expect(read!.patterns).toEqual([path.join("src", "secret.ts")])
+      expect(read).toBeUndefined()
     }),
   )
 
@@ -327,7 +326,7 @@ describe("tool.read env file permissions", () => {
                     Effect.sync(() => {
                       for (const pattern of req.patterns) {
                         const rule = Permission.evaluate(req.permission, pattern, info.permission)
-                        if (rule.action === "ask" && req.permission === "read") {
+                        if (rule.action === "ask" && (req.permission === "read" || req.permission === "read_sensitive")) {
                           asked = true
                         }
                         if (rule.action === "deny") {
@@ -348,6 +347,16 @@ describe("tool.read env file permissions", () => {
       }
     })
   }
+
+  it.live("denies credential reads that broad read allow rules would otherwise permit", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      yield* put(path.join(dir, "private.key"), "content")
+
+      const err = yield* fail(dir, { filePath: path.join(dir, "private.key") })
+      expect(err.message).toContain("auto-review denied sensitive read")
+    }),
+  )
 })
 
 describe("tool.read truncation", () => {

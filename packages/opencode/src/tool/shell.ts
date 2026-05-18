@@ -23,6 +23,10 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { AutoReview, type Review as AutoReviewResult } from "@/permission/auto-review"
+import { AutoReviewAudit } from "@/permission/audit"
+import { Permission } from "@/permission"
+import { Agent } from "@/agent/agent"
 
 export { Parameters } from "./shell/prompt"
 
@@ -264,7 +268,38 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
   return tree
 })
 
-const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan) {
+const ask = Effect.fn("ShellTool.ask")(function* (
+  ctx: Tool.Context,
+  scan: Scan,
+  review: AutoReviewResult,
+  input: {
+    command: string
+    cwd: string
+    projectID: string
+    agent: Agent.Interface
+  },
+) {
+  const record = (decision = review.decision) =>
+    AutoReviewAudit.record({
+      sessionID: ctx.sessionID,
+      projectID: input.projectID,
+      cwd: input.cwd,
+      toolType: "shell",
+      command: input.command,
+      readPaths: [],
+      writePaths: [],
+      decision,
+      risk: review.risk,
+      reason: review.reasons.join("; "),
+      categories: review.categories,
+      timestamp: Date.now(),
+    })
+
+  if (review.decision === "deny") {
+    record()
+    return yield* Effect.die(new Error(`Permission auto-review denied shell command: ${review.reasons.join("; ")}`))
+  }
+
   if (scan.dirs.size > 0) {
     const globs = Array.from(scan.dirs).map((dir) => {
       if (process.platform === "win32") return AppFileSystem.normalizePathPattern(path.join(dir, "*"))
@@ -279,6 +314,18 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan)
   }
 
   if (scan.patterns.size === 0) return
+  if (review.decision === "allow") {
+    const info = yield* input.agent.get(ctx.agent)
+    const denied = Array.from(scan.patterns).some(
+      (pattern) => Permission.evaluate(ShellID.ToolID, pattern, info.permission).action === "deny",
+    )
+    if (!denied) {
+      record()
+      return
+    }
+  }
+
+  record("ask")
   yield* ctx.ask({
     permission: ShellID.ToolID,
     patterns: Array.from(scan.patterns),
@@ -336,6 +383,7 @@ export const ShellTool = Tool.define(
   ShellID.ToolID,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const agent = yield* Agent.Service
     const spawner = yield* ChildProcessSpawner
     const fs = yield* AppFileSystem.Service
     const trunc = yield* Truncate.Service
@@ -644,7 +692,18 @@ export const ShellTool = Tool.define(
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
                   if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan)
+                  const review = AutoReview.reviewCommand({
+                    command: params.command,
+                    cwd,
+                    readPaths: [],
+                    writePaths: [],
+                  })
+                  yield* ask(ctx, scan, review, {
+                    command: params.command,
+                    cwd,
+                    projectID: instanceCtx.project.id,
+                    agent,
+                  })
                 }),
               )
 

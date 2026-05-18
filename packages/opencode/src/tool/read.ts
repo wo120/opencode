@@ -10,6 +10,10 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
+import { AutoReview } from "@/permission/auto-review"
+import { AutoReviewAudit } from "@/permission/audit"
+import { Permission } from "@/permission"
+import { Agent } from "@/agent/agent"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -43,6 +47,7 @@ export const ReadTool = Tool.define(
     const instruction = yield* Instruction.Service
     const lsp = yield* LSP.Service
     const reference = yield* Reference.Service
+    const agents = yield* Agent.Service
     const scope = yield* Scope.Scope
 
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
@@ -224,12 +229,59 @@ export const ReadTool = Tool.define(
         kind: stat?.type === "Directory" ? "directory" : "file",
       })
 
-      yield* ctx.ask({
-        permission: "read",
-        patterns: [path.relative(instance.worktree, filepath)],
-        always: ["*"],
-        metadata: {},
+      const readPattern = path.relative(instance.worktree, filepath)
+      const review = AutoReview.reviewFileAccess({
+        cwd: instance.directory,
+        toolType: "read",
+        readPaths: [filepath],
+        writePaths: [],
       })
+      const record = (decision = review.decision) =>
+        AutoReviewAudit.record({
+          sessionID: ctx.sessionID,
+          projectID: instance.project.id,
+          cwd: instance.directory,
+          toolType: "read",
+          readPaths: [filepath],
+          writePaths: [],
+          decision,
+          risk: review.risk,
+          reason: review.reasons.join("; "),
+          categories: review.categories,
+          timestamp: Date.now(),
+        })
+
+      if (review.decision === "allow") {
+        const info = yield* agents.get(ctx.agent)
+        if (Permission.evaluate("read", readPattern, info.permission).action !== "deny") {
+          record()
+        } else {
+          record("ask")
+          yield* ctx.ask({
+            permission: "read",
+            patterns: [readPattern],
+            always: ["*"],
+            metadata: {},
+          })
+        }
+      } else {
+        const info = yield* agents.get(ctx.agent)
+        if (Permission.evaluate("read", readPattern, info.permission).action === "allow") {
+          record("deny")
+          return yield* Effect.die(new Error(`Permission auto-review denied sensitive read: ${review.reasons.join("; ")}`))
+        }
+        record("ask")
+        yield* ctx.ask({
+          permission: "read",
+          patterns: [readPattern],
+          always: [],
+          metadata: {
+            filepath,
+            reason: review.reasons.join("; "),
+            risk: review.risk,
+          },
+        })
+      }
 
       if (!stat) return yield* miss(filepath)
 
