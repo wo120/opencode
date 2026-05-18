@@ -176,3 +176,71 @@ Do not expand this work into broad memory automation, vector storage, or large f
 - `NEEDS_CONTEXT`
 - high-severity review findings
 - verification failures
+
+## Token 节省策略
+
+当前二开节省 token / 降成本不是通过复杂 memory system，而是通过以下四类窄策略实现。
+
+### 1. 利用 DeepSeek prompt cache
+
+核心策略是保持重复上下文可缓存，并读取 DeepSeek 返回的 cache telemetry 来评估真实收益。
+
+已接入字段：
+
+```ts
+usage.raw.prompt_cache_hit_tokens
+usage.raw.prompt_cache_miss_tokens
+```
+
+落盘/聚合字段：
+
+```ts
+tokens.cache.hit
+tokens.cache.miss
+tokens.cache.ratio
+tokens.cache.read
+```
+
+示例观测：同一个 session 中第二次发送“你好”时，普通 input 约为 `37`，cache read 约为 `11392`，cache hit ratio 约 `99.6%`。这说明重复 prompt 前缀已被 DeepSeek prompt cache 吃掉，成本按 cache-read 路径计算。
+
+### 2. hidden/background agent 走 `small_model`
+
+主任务继续使用主模型，后台/隐藏任务使用配置的 `small_model`：
+
+- title generation 使用 `small_model`。
+- compaction / summary 类后台任务按配置优先使用小模型。
+- foreground prompt 不降级，避免质量回退。
+
+这个策略的目标是把标题、摘要、压缩等低风险后台成本从主模型挪到便宜模型。
+
+### 3. 稳定 prompt / instructions 前缀
+
+Prompt cache 的收益依赖稳定前缀。二开里恢复并保持 `global → project` 的语义顺序，避免为了字母排序破坏 prompt 前缀。
+
+目标：
+
+- 同类任务重复执行时 system prompt 前缀更稳定。
+- 提高 DeepSeek prompt cache 命中率。
+- 避免缓存观测被 instructions 顺序漂移污染。
+
+### 4. 工具输出摘要 / error summary
+
+长工具输出不应无差别塞回上下文。工具输出被截断时，保留高价值错误摘要，尤其是测试/命令失败原因。
+
+目标：
+
+- 降低无效 stdout/stderr 对上下文的占用。
+- 保留调试所需的关键失败信息。
+- 减少因为截断导致的二次 `NEEDS_CONTEXT`。
+
+### 明确不做的节省策略
+
+当前阶段不做：
+
+- 自动关闭 memory。
+- vector DB / SQLite memory system。
+- 复杂 GC / compaction 策略。
+- LLM 归因 memory 污染。
+- 大规模跨语言 fixture 扩展。
+
+后续是否扩展，取决于 1-2 周真实任务数据：total token 是否下降，同时 `NEEDS_CONTEXT`、高危 review finding、verification failure 是否不上升。
