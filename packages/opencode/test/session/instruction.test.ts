@@ -14,14 +14,19 @@ import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { provideInstance, provideTmpdirInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestConfig } from "../fixture/config"
+import type { Config } from "../../src/config/config"
 
 const it = testEffect(Layer.mergeAll(CrossSpawnSpawner.defaultLayer, NodeFileSystem.layer))
 
 const configLayer = TestConfig.layer()
 
-const instructionLayer = (global: Partial<Global.Interface>, flags: Partial<RuntimeFlags.Info> = {}) =>
+const instructionLayer = (
+  global: Partial<Global.Interface>,
+  flags: Partial<RuntimeFlags.Info> = {},
+  config = configLayer,
+) =>
   Instruction.layer.pipe(
-    Layer.provide(configLayer),
+    Layer.provide(config),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(Global.layerWith(global)),
@@ -29,9 +34,9 @@ const instructionLayer = (global: Partial<Global.Interface>, flags: Partial<Runt
   )
 
 const provideInstruction =
-  (global: Partial<Global.Interface>, flags?: Partial<RuntimeFlags.Info>) =>
+  (global: Partial<Global.Interface>, flags?: Partial<RuntimeFlags.Info>, config?: Layer.Layer<Config.Service>) =>
   <A, E, R>(self: Effect.Effect<A, E, R>) =>
-    self.pipe(Effect.provide(instructionLayer(global, flags)))
+    self.pipe(Effect.provide(instructionLayer(global, flags, config)))
 
 const write = (filepath: string, content: string) =>
   Effect.gen(function* () {
@@ -215,6 +220,56 @@ describe("Instruction.system", () => {
         expect(rules[0]).toBe(`Instructions from: ${path.join(globalTmp, "AGENTS.md")}\n# Global Instructions`)
         expect(rules[1]).toBe(`Instructions from: ${path.join(projectTmp, "AGENTS.md")}\n# Project Instructions`)
       }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
+    }),
+  )
+
+
+  it.live("keeps semantic global then project order instead of alphabetical path order", () =>
+    Effect.gen(function* () {
+      const root = yield* tmpdirScoped()
+      const globalTmp = path.join(root, "z-global")
+      const projectTmp = path.join(root, "a-project")
+      yield* writeFiles(root, {
+        "z-global/AGENTS.md": "# Global Instructions",
+        "a-project/AGENTS.md": "# Project Instructions",
+      })
+
+      yield* Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        const rules = yield* svc.system()
+        expect(rules).toEqual([
+          `Instructions from: ${path.join(globalTmp, "AGENTS.md")}\n# Global Instructions`,
+          `Instructions from: ${path.join(projectTmp, "AGENTS.md")}\n# Project Instructions`,
+        ])
+      }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
+    }),
+  )
+
+  it.live("keeps configured instruction order stable across repeated system builds", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpWithFiles({
+        "AGENTS.md": "# Project Instructions",
+        "z-extra.md": "# Z Extra",
+        "a-extra.md": "# A Extra",
+      })
+      const config = TestConfig.layer({
+        get: () => Effect.succeed({ instructions: [path.join(dir, "z-extra.md"), path.join(dir, "a-extra.md")] }),
+      })
+
+      yield* Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        const first = yield* svc.system()
+        const second = yield* svc.system()
+        expect(first).toEqual(second)
+        expect(first).toEqual([
+          `Instructions from: ${path.join(dir, "AGENTS.md")}\n# Project Instructions`,
+          `Instructions from: ${path.join(dir, "z-extra.md")}\n# Z Extra`,
+          `Instructions from: ${path.join(dir, "a-extra.md")}\n# A Extra`,
+        ])
+      }).pipe(
+        provideInstance(dir),
+        provideInstruction({ home: path.join(dir, "empty-global"), config: dir }, {}, config),
+      )
     }),
   )
 
